@@ -6,10 +6,10 @@ const { DefaultArtifactClient } = require("@actions/artifact");
 const artifactClient = new DefaultArtifactClient();
 const { exec } = require("child_process");
 const util = require("util");
-
 const execPromise = util.promisify(exec);
 
-const manifestBinary = "manifest-cli";
+const manifestBinary =
+  process.platform === "win32" ? "manifest-cli.exe" : "manifest-cli";
 // Use the official install script from GitHub.
 const remoteInstallScriptURL =
   "https://raw.githubusercontent.com/manifest-cyber/cli/main/install.sh";
@@ -33,6 +33,14 @@ async function execWrapper(cmd) {
       console.log(`stderr: ${stderr}`);
     }
   } catch (error) {
+    // Print whatever the child process emitted before it failed:
+    if (error.stdout) {
+      console.log(`stdout: ${error.stdout}`);
+    }
+    if (error.stderr) {
+      console.log(`stderr: ${error.stderr}`);
+    }
+    // Now fail the Action with the full error
     core.setFailed(`Error executing command: ${cmd}\n${error}`);
     throw error;
   }
@@ -79,13 +87,18 @@ async function generateSBOM(
   generatorVersion,
   generatorPreset,
   generatorConfig,
-  generatorFlags
+  generatorFlags,
+  verbose,
+  installDir
 ) {
   if (fileExists(outputPath)) {
     return outputPath;
   }
   validateInput(outputFormat, generator);
   let sbomFlags = `--file=${outputPath} --output="${outputFormat}" --name="${sbomName}" --version="${sbomVersion}" --generator="${generator}" --publish=false ${targetPath}`;
+  if (verbose === "true") {
+    sbomFlags = `${sbomFlags} -vvv`;
+  }
   if (generatorFlags) {
     sbomFlags = `${sbomFlags} -- ${generatorFlags}`;
   }
@@ -101,7 +114,7 @@ async function generateSBOM(
     generatorVersion = "v11.1.8";
   }
 
-  const installCommand = `${manifestBinary} install --generator="${generator}" --version="${generatorVersion}"`;
+  const installCommand = `${manifestBinary} install --generator="${generator}" --version="${generatorVersion}" --destination="${installDir}"`;
   const generateCommand = `${manifestBinary} sbom --generator-preset="${generatorPreset}" --generator-config="${generatorConfig}" ${sbomFlags}`;
 
   core.info(`Installing generator using command: ${installCommand}`);
@@ -123,6 +136,9 @@ async function generateSBOM(
   try {
     const apiKey = core.getInput("apiKey") || core.getInput("apikey");
     core.setSecret(apiKey);
+    if (apiKey) {
+      process.env.MANIFEST_API_KEY = apiKey;
+    }
 
     const targetPath = core.getInput("path") || process.cwd();
 
@@ -182,7 +198,9 @@ async function generateSBOM(
     const uploadArtifactToGithub =
       core.getInput("sbomArtifact") || core.getInput("bomArtifact") || "true";
     const githubArtifactName =
-      core.getInput("sbomArtifactName") || core.getInput("bomArtifactName") || "sbom";
+      core.getInput("sbomArtifactName") ||
+      core.getInput("bomArtifactName") ||
+      "sbom";
     const publish =
       core.getInput("sbomPublish") ||
       core.getInput("bomPublish") ||
@@ -204,15 +222,27 @@ async function generateSBOM(
     const productLabels = core.getInput("product-labels") || "";
     const productId = core.getInput("product-id") || "";
 
+    const verbose = core.getInput("verbose");
+    if (verbose === "true") {
+      core.info("Verbose mode enabled");
+    }
+
+    const cliVersionInput =
+      core.getInput("manifest-cli-version") ||
+      core.getInput("manifestCLIVersion");
+    const cliVersionToInstall = cliVersionInput || "latest";
+
+    console.log(`Manifest CLI version to install: ${cliVersionToInstall}`);
+
     // Create a unique temporary folder inside the system tmp directory.
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "manifest-cli-"));
-    const installCommand = `curl -sSfL ${remoteInstallScriptURL} | sh -s -- -b ${installDir}`;
+    const installCommand = `curl -sSfL ${remoteInstallScriptURL} | sh -s -- -b ${installDir} ${cliVersionToInstall}`;
     core.info(`Installing Manifest CLI using command: ${installCommand}`);
     await execWrapper(installCommand);
     core.info("Manifest CLI installed.");
 
     // Add the install directory to the PATH.
-    process.env.PATH = `${installDir}:${process.env.PATH}`;
+    process.env.PATH = `${installDir}${path.delimiter}${process.env.PATH}`;
 
     const outputPath = await generateSBOM(
       targetPath,
@@ -224,7 +254,9 @@ async function generateSBOM(
       generatorVersion,
       generatorPreset,
       generatorConfig,
-      generatorFlags
+      generatorFlags,
+      verbose,
+      installDir
     );
 
     // Optionally upload the SBOM as an artifact.
@@ -240,7 +272,6 @@ async function generateSBOM(
     // Optionally publish the SBOM if an API key is provided.
     if (shouldPublish(apiKey, publish)) {
       let publishCommandParts = [
-        `MANIFEST_API_KEY=${apiKey}`,
         `${manifestBinary}`,
         `publish`,
         `--ignore-validation="true"`,
@@ -260,6 +291,10 @@ async function generateSBOM(
       if (enrich) {
         publishCommandParts.push(`--enrich="${enrich.toUpperCase()}"`);
       }
+      if (verbose === "true") {
+        publishCommandParts.push(`-vvv`);
+      }
+
       publishCommandParts.push(bomFilePath);
       let publishCommand = publishCommandParts.join(" ");
       publishCommand = `${publishCommand} --source="github-action"`;

@@ -14,9 +14,9 @@ permissions:
   contents: read
 
 jobs:
-  generate-sbom:
+  Generate-sbom:
     runs-on: ubuntu-latest
-
+    name: Generate SBOM
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
