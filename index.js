@@ -6,7 +6,6 @@ const { DefaultArtifactClient } = require("@actions/artifact");
 const artifactClient = new DefaultArtifactClient();
 const { exec } = require("child_process");
 const util = require("util");
-const semver = require("semver");
 
 const execPromise = util.promisify(exec);
 
@@ -180,8 +179,10 @@ async function generateSBOM(
     const generatorVersion = core.getInput("generator-version") || "";
     const generatorConfig = core.getInput("generator-config") || "";
     const generatorPreset = core.getInput("generator-preset") || "";
-    const artifact =
-      core.getInput("sbomArtifact") || core.getInput("bomArtifact");
+    const uploadArtifactToGithub =
+      core.getInput("sbomArtifact") || core.getInput("bomArtifact") || "true";
+    const githubArtifactName =
+      core.getInput("sbomArtifactName") || core.getInput("bomArtifactName") || "sbom";
     const publish =
       core.getInput("sbomPublish") ||
       core.getInput("bomPublish") ||
@@ -227,9 +228,9 @@ async function generateSBOM(
     );
 
     // Optionally upload the SBOM as an artifact.
-    if (outputPath && artifact === "true") {
+    if (outputPath && uploadArtifactToGithub === "true") {
       const upload = await artifactClient.uploadArtifact(
-        "sbom",
+        githubArtifactName,
         [outputPath],
         path.dirname(outputPath)
       );
